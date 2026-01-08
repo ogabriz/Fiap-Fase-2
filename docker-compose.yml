@@ -1,0 +1,141 @@
+version: '3.8'
+
+services:
+  # --- Infraestrutura ---
+  auth_db:
+    image: postgres:15
+    container_name: auth_db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: admin
+      POSTGRES_DB: auth_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  flags_db:
+    image: postgres:15
+    container_name: flags_db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: admin
+      POSTGRES_DB: flags_db 
+    ports:
+      - "5433:5432"
+    volumes:
+      - flags_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      
+  targeting_db:
+    image: postgres:15
+    container_name: targeting_db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: admin
+      POSTGRES_DB: targeting_db 
+    ports:
+      - "5434:5432"
+    volumes:
+      - targeting_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5          
+
+  redis:
+    image: redis:alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+
+  # --- Aplicações ---
+  auth-service:
+    build: ./auth-service
+    container_name: auth-service
+    ports:
+      - "8001:8001"
+    env_file:
+      - ./auth-service/.env
+    environment:
+      - DATABASE_URL=postgres://postgres:admin@auth_db:5432/auth_db
+    depends_on:
+      auth_db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  flag-service:
+    build: ./flag-service
+    container_name: flag-service
+    ports:
+      - "8002:8002"
+    env_file:
+      - ./flag-service/.env
+    environment:
+      - DATABASE_URL=postgres://postgres:admin@flags_db:5432/flags_db
+      - AUTH_SERVICE_URL=http://auth-service:8001
+    depends_on:
+      flags_db:
+        condition: service_healthy
+      auth-service:
+        condition: service_started
+    restart: unless-stopped
+
+  targeting-service:
+    build: ./targeting-service
+    container_name: targeting-service
+    ports:
+      - "8003:8003"
+    environment:
+      - DATABASE_URL=postgres://postgres:admin@targeting_db:5432/targeting_db
+      - AUTH_SERVICE_URL=http://auth-service:8001
+      - PORT=8003
+    depends_on:
+      targeting_db:
+        condition: service_healthy
+      auth-service:
+        condition: service_started
+    restart: unless-stopped
+
+  evaluation-service:
+    build: ./evaluation-service
+    container_name: evaluation-service
+    ports:
+      - "8004:8004"
+    env_file:
+      - ./evaluation-service/.env
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - FLAG_SERVICE_URL=http://flag-service:8002
+      - TARGETING_SERVICE_URL=http://targeting-service:8003
+    depends_on:
+      - redis
+      - flag-service
+      - targeting-service
+    restart: unless-stopped
+
+  analytics-service:
+    build: ./analytics-service
+    container_name: analytics-service
+    ports:
+      - "8005:8005"
+    env_file:
+      - ./analytics-service/.env
+    depends_on:
+      - evaluation-service
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  flags_postgres_data:
+  targeting_postgres_data:
